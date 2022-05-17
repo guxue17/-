@@ -1,0 +1,822 @@
+C51 COMPILER V9.01   MAIN                                                                  06/15/2021 23:49:52 PAGE 1   
+
+
+C51 COMPILER V9.01, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: F:\keil_c51\C51\BIN\C51.EXE main.c BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\main.lst) OBJECT(.\Ob
+                    -jects\main.obj)
+
+line level    source
+
+   1          #include "reg51.H"
+   2          #include <intrins.h> 
+   3          #include <string.h>           // 加入此头文件后,可使用strstr库函数
+   4          #include <stdio.h>
+   5          
+   6          sbit LCD_RS     = P1^0;  //寄存器选择输入端，LCD1602的第四脚
+   7          sbit LCD_RW     = P1^1;  //读写控制输入端，LCD1602的第五脚
+   8          sbit LCD_E      = P1^2;  //使能信号输入端, LCD1602的第六脚
+   9          
+  10          sbit DS18B20_DAT  = P1^3;  //DS18B20 DATA信号
+  11          
+  12          sbit ADC_CS=P2^7;   //ADC0832 CS脚
+  13          sbit ADC_CLK=P2^6;   //ADC0832 CS脚
+  14          sbit ADC_DO_DI=P2^5;   //ADC0832 CS脚
+  15          
+  16          sbit Key_SET    = P3^2;  //设置
+  17          sbit Key_Plus   = P3^3;  //加(+)
+  18          sbit Key_Dec    = P3^4;  //减(-)
+  19          
+  20          sbit Key_Fan    = P3^5;  //风扇按键
+  21          sbit Key_Hot    = P3^6;  //加热按键
+  22          sbit Key_LED    = P3^7;  //照明按键
+  23          sbit Key_Light  = P2^3;  //遮光按键
+  24          
+  25          sbit RY_Fan     = P2^0;  //风扇继电器
+  26          sbit RY_Hot     = P2^1;  //加热继电器
+  27          sbit RY_LED     = P2^2;  //照明继电器
+  28           
+  29          //步进电机 
+  30          sbit Motor1     = P1^4;
+  31          sbit Motor2     = P1^5;
+  32          sbit Motor3     = P1^6;
+  33          sbit Motor4     = P1^7;
+  34          
+  35          
+  36          sbit BEEP=P2^4; //蜂鸣器
+  37          
+  38          
+  39          #define u8  unsigned char
+  40          #define u16 unsigned int
+  41          
+  42          #define   LCD_Data               P0                     //LCD1602数据接口
+  43          
+  44          u16 KeyValue,KeyState;
+  45          
+  46          u8 xdata buff[20];//参数显示缓存数组
+  47          
+  48          u16 ctemp;        //实时温度变量
+  49          u16 cLight;       //实时光照变量
+  50          u16 cHumi;       //实时湿度变量
+  51          
+  52          u8 stemp_H=25;      //保存设置温度上限阈值变量,初值为25
+  53          u8 stemp_L=20;      //保存设置温度下限阈值变量,初值为20
+  54          u8 sLight_H=70;     //保存设置光照上限阈值变量,初值为70
+C51 COMPILER V9.01   MAIN                                                                  06/15/2021 23:49:52 PAGE 2   
+
+  55          u8 sLight_L=30;     //保存设置光照下限阈值变量,初值为30
+  56          u8 sHumi=30;     //保存设置湿度阈值变量,初值为30
+  57          
+  58          u8 presskeynum=0;    //按键计数 
+  59          u8 setflag=0;
+  60          u8 workmode=0; //工作模式 0 自动 1手动
+  61          
+  62          u8 tempflag=0; //温度状态标志
+  63          u8 lightflag=0; //光照状态标志
+  64          u8 humiflag=0; //光照状态标志
+  65          u8 fanflag=0; //风扇状态
+  66          u8 hotflag=0; //加热状态
+  67          u8 ledflag=0; //led状态
+  68          u16 motortime=0;
+  69          u8 motorflag=0; //步进电机状态
+  70          
+  71          //延时相关函数
+  72          void delay_us(unsigned int q)//延时函数1us
+  73          {
+  74   1              while(q--);
+  75   1      }
+  76          
+  77          void Delay_ms(u16 x)    //延时xms
+  78          {  
+  79   1              u16 j,i;   
+  80   1              for(j=0;j<x;j++)   
+  81   1              {    
+  82   2                      for(i=0;i<110;i++);   
+  83   2              }  
+  84   1      }
+  85          
+  86          //LCD显示相关
+  87          void LCD_WriteData(u8 WrData)  //LCD模块写数据
+  88          {
+  89   1              LCD_E    = 0;
+  90   1              LCD_RS   = 1;
+  91   1              LCD_RW   = 0;
+  92   1              LCD_Data = WrData;
+  93   1              Delay_ms(1);    //延时一小会儿，让1602准备接收数据
+  94   1              LCD_E    = 1;
+  95   1              Delay_ms(2);    
+  96   1              LCD_E    = 0;
+  97   1      }
+  98          void LCD_WriteCMD(u8 WrCmd)  //LCD模块写命令
+  99          {
+ 100   1              LCD_E    = 0;
+ 101   1              LCD_RS   = 0;
+ 102   1              LCD_RW   = 0;
+ 103   1              LCD_Data = WrCmd;
+ 104   1              Delay_ms(1);      //延时一小会儿，让1602准备接收数据
+ 105   1              LCD_E    = 1; 
+ 106   1              Delay_ms(2);    
+ 107   1              LCD_E    = 0;
+ 108   1      }
+ 109          
+ 110          void LCD_Init(void)    //LCD初始化             
+ 111          { 
+ 112   1              LCD_WriteCMD(0x38);       //8位数据，双列，5*7字形  
+ 113   1              Delay_ms(5);
+ 114   1              LCD_WriteCMD(0x38);       //8位数据，双列，5*7字形       
+ 115   1        Delay_ms(5);
+ 116   1              LCD_WriteCMD(0x38);       //8位数据，双列，5*7字形  
+C51 COMPILER V9.01   MAIN                                                                  06/15/2021 23:49:52 PAGE 3   
+
+ 117   1              Delay_ms(5);
+ 118   1              LCD_WriteCMD(0x0c);       //开启显示屏，关光标，光标不闪烁 
+ 119   1        LCD_WriteCMD(0x06);       //显示地址递增，即写一个数据后，显示位置右移一位 
+ 120   1        LCD_WriteCMD(0x01);       //清屏 
+ 121   1      }               
+ 122          
+ 123          void DisplayOneChar(u8 X, u8 Y, u8 DData)        //LCD1602按指定位置显示一个字符
+ 124          {
+ 125   1              Y &= 0x1;
+ 126   1              X &= 0xF;                //限制X不能大于15，Y不能大于1
+ 127   1              if (Y) X |= 0x40;        //当要显示第二行时地址码+0x40;
+ 128   1              X |= 0x80;               //算出指令码
+ 129   1              LCD_WriteCMD(X);         //发命令字
+ 130   1              LCD_WriteData(DData);    //发数据
+ 131   1      }
+ 132          
+ 133          void DisplayListChar(u8 X, u8 Y, u8 *DData)     //LCD1602按指定位置显示一串字符
+ 134          {
+ 135   1              u8 ListLength;
+ 136   1              ListLength = 0;
+ 137   1              Y &= 0x1;
+ 138   1              X &= 0xF; //限制X不能大于15，Y不能大于1
+ 139   1              while (DData[ListLength]>0x19) //若到达字串尾则退出
+ 140   1              {
+ 141   2                      if (X <= 0xF)        //X坐标应小于0xF
+ 142   2                      {
+ 143   3                              DisplayOneChar(X, Y, DData[ListLength]); //显示单个字符
+ 144   3                              ListLength++;
+ 145   3                              X++;
+ 146   3                      }
+ 147   2              }
+ 148   1      }
+ 149          
+ 150          u8 ADC(bit mode,bit channel)     //AD转换，返回结果
+ 151          {
+ 152   1              u8 i,dat,ndat;
+ 153   1              
+ 154   1              ADC_CS = 0;//拉低CS端
+ 155   1              _nop_();
+ 156   1              _nop_();
+ 157   1              
+ 158   1              ADC_DO_DI = 1;  //第1个下降沿为高电平
+ 159   1              ADC_CLK = 1;//拉高CLK端
+ 160   1              _nop_();
+ 161   1              _nop_();
+ 162   1              ADC_CLK = 0;//拉低CLK端,形成下降沿1
+ 163   1              _nop_();
+ 164   1              _nop_();
+ 165   1              
+ 166   1              ADC_DO_DI = mode;       //低电平为差分模式，高电平为单通道模式。        
+ 167   1              ADC_CLK = 1;//拉高CLK端
+ 168   1              _nop_();
+ 169   1              _nop_();
+ 170   1              ADC_CLK = 0;//拉低CLK端,形成下降沿2
+ 171   1              _nop_();
+ 172   1              _nop_();
+ 173   1              
+ 174   1              ADC_DO_DI = channel;    //低电平为CH0，高电平为CH1      
+ 175   1              ADC_CLK = 1;//拉高CLK端
+ 176   1              _nop_();
+ 177   1              _nop_();
+ 178   1              ADC_CLK = 0;//拉低CLK端,形成下降沿3
+C51 COMPILER V9.01   MAIN                                                                  06/15/2021 23:49:52 PAGE 4   
+
+ 179   1              
+ 180   1              ADC_DO_DI = 1;//控制命令结束(经试验必需)
+ 181   1              dat = 0;
+ 182   1              //下面开始读取转换后的数据，从最高位开始依次输出（D7~D0）
+ 183   1              for(i = 0;i < 8;i++)
+ 184   1              {
+ 185   2                      dat <<= 1;
+ 186   2                      ADC_CLK=1;//拉高时钟端
+ 187   2                      _nop_();
+ 188   2                      _nop_();
+ 189   2                      ADC_CLK=0;//拉低时钟端形成一次时钟脉冲
+ 190   2                      _nop_();
+ 191   2                      _nop_();
+ 192   2                      dat |= ADC_DO_DI;
+ 193   2              }
+ 194   1              ndat = 0;          //记录D0
+ 195   1              if(ADC_DO_DI == 1)
+ 196   1              ndat |= 0x80;
+ 197   1              //下面开始继续读取反序的数据（从D1到D7） 
+ 198   1              for(i = 0;i < 7;i++)
+ 199   1              {
+ 200   2                      ndat >>= 1;
+ 201   2                      ADC_CLK = 1;//拉高时钟端
+ 202   2                      _nop_();
+ 203   2                      _nop_();
+ 204   2                      ADC_CLK=0;//拉低时钟端形成一次时钟脉冲
+ 205   2                      _nop_();
+ 206   2                      _nop_();
+ 207   2                      if(ADC_DO_DI==1)
+ 208   2                      ndat |= 0x80;
+ 209   2              }         
+ 210   1              ADC_CS=1;//拉高CS端,结束转换
+ 211   1              ADC_CLK=0;//拉低CLK端
+ 212   1              ADC_DO_DI=1;//拉高数据端,回到初始状态
+ 213   1              if(dat==ndat)
+ 214   1              return(dat);
+ 215   1              else
+ 216   1              return 0;   
+ 217   1      }
+ 218          
+ 219          
+ 220          /***********************18b20初始化函数*****************************/
+ 221          void init_18b20()
+ 222          {
+ 223   1              bit q;
+ 224   1              DS18B20_DAT = 1;                                //把总线拿高
+ 225   1              delay_us(1);            //15us
+ 226   1              DS18B20_DAT = 0;                                //给复位脉冲
+ 227   1              delay_us(80);                //750us
+ 228   1              DS18B20_DAT = 1;                                //把总线拿高 等待
+ 229   1              delay_us(10);                //110us
+ 230   1              q = DS18B20_DAT;                                //读取18b20初始化信号
+ 231   1              delay_us(20);                //200us
+ 232   1              DS18B20_DAT = 1;                                //把总线拿高 释放总线
+ 233   1      }
+ 234          
+ 235          /*************写18b20内的数据***************/
+ 236          void write_18b20(u8 dat)
+ 237          {
+ 238   1              u8 i;
+ 239   1              for(i=0;i<8;i++)
+ 240   1              {                                         //写数据是低位开始
+C51 COMPILER V9.01   MAIN                                                                  06/15/2021 23:49:52 PAGE 5   
+
+ 241   2                      DS18B20_DAT = 0;                         //把总线拿低写时间隙开始 
+ 242   2                      DS18B20_DAT = dat & 0x01; //向18b20总线写数据了
+ 243   2                      delay_us(5);         // 60us
+ 244   2                      DS18B20_DAT = 1;     //释放总线
+ 245   2                      dat >>= 1;
+ 246   2              }        
+ 247   1      }
+ 248          
+ 249          /*************读取18b20内的数据***************/
+ 250          u8 read_18b20()
+ 251          {
+ 252   1              u8 i,value;
+ 253   1              for(i=0;i<8;i++)
+ 254   1              {
+ 255   2                      DS18B20_DAT = 0;                         //把总线拿低读时间隙开始 
+ 256   2                      value >>= 1;         //读数据是低位开始
+ 257   2                      DS18B20_DAT = 1;                         //释放总线
+ 258   2                      if(DS18B20_DAT == 1)                 //开始读写数据 
+ 259   2                                      value |= 0x80;
+ 260   2                      delay_us(5);         //60us        读一个时间隙最少要保持60us的时间
+ 261   2              }
+ 262   1              return value;                 //返回数据
+ 263   1      }
+ 264          
+ 265          /*************读取温度的值 读出来的是小数***************/
+ 266          int read_temp() 
+ 267          {
+ 268   1              int temp;     //返回值
+ 269   1              u8 low,high;  //读取到的低8位和高8位数据
+ 270   1              
+ 271   1              init_18b20();                   //初始化18b20
+ 272   1      
+ 273   1              write_18b20(0xcc);//发送跳过读取64位ROM指令
+ 274   1              write_18b20(0x44);           //启动一次温度转换命令
+ 275   1              delay_us(50);                   //500us
+ 276   1      
+ 277   1              init_18b20();                   //初始化18b20
+ 278   1              write_18b20(0xcc);//发送跳过读取64位ROM指令
+ 279   1              write_18b20(0xbe);           //发出读取暂存器命令
+ 280   1              
+ 281   1              low  = read_18b20();         //读温度低字节
+ 282   1              high = read_18b20();         //读温度高字节
+ 283   1              temp = high*256+low;         //计算
+ 284   1      
+ 285   1              return temp;                 //返回读出的温度 带小数
+ 286   1      }
+ 287          
+ 288          void Uart_Init()         //定时器、串口初始化
+ 289          {
+ 290   1              SCON  = 0x50;   // SCON: 模式 1, 8-bit UART, 使能接收 允许串口接收（0x40 禁止串口接收）
+ 291   1              TMOD |= 0x20;  // TMOD: timer 1, mode 2, 8-bit reload   定时器Y/C1工作方式2 //PCON=0x80设置波特率9600 
+ 292   1              TH1   = 253;   //定时器初值高8位设置     
+ 293   1              TL1   = 253;   //定时器初值低8位设置
+ 294   1              TR1   = 1;     //定时器1开关打开，定时器启动               
+ 295   1              ES    = 1;     //打开串口中断 ，允许UART串口中断
+ 296   1              EA    = 1;     //打开总中断、允许总中断     
+ 297   1              TI    = 0;         // 令发送中断标志位为0
+ 298   1              RI    = 0;              //令接收中断标志位为0
+ 299   1      }
+ 300             //向串口发送一个字符
+ 301          void SendASC(unsigned char d)
+ 302          {       
+C51 COMPILER V9.01   MAIN                                                                  06/15/2021 23:49:52 PAGE 6   
+
+ 303   1              SBUF=d;  //将在接收到的数据发送出去
+ 304   1              while(!TI);       //检查发送中断标志位
+ 305   1              TI=0;  // 令发送中断标志位为0
+ 306   1      }
+ 307            //向串口发送一个字符串，不限长度
+ 308          void SendString(unsigned char *str)     
+ 309          {
+ 310   1              while(*str)
+ 311   1              {
+ 312   2                      SendASC(*str) ;
+ 313   2                      str++;
+ 314   2              }
+ 315   1      }
+ 316          
+ 317          void GSM_work()
+ 318          {
+ 319   1              SendString("AT\r\n");  
+ 320   1              Delay_ms(200);
+ 321   1              SendString("AT+CMGF=1\r\n");//设置短信模式为文本模式    
+ 322   1              Delay_ms(200);
+ 323   1              SendString("AT+CSCS=\"IRA\"\r\n");       //设置字符集编码
+ 324   1              Delay_ms(200);
+ 325   1              SendString("AT+CSMP=17,11,0,0\r\n");//设置英文模式      
+ 326   1              Delay_ms(200);
+ 327   1              SendString("AT+CMGS=\"13358822086\"\r\n");      //信息发送指令 AT+CMGS=//
+ 328   1              Delay_ms(500);
+ 329   1              SendString("The soil moisture is too low, please note!");                                          
+ 330   1              Delay_ms(200);          
+ 331   1              SendASC(0x1a);
+ 332   1      }       
+ 333          
+ 334          void MotorFunction(u8 mode,u16 time)
+ 335          {
+ 336   1              if(mode==0) //正转
+ 337   1              {
+ 338   2                      Motor1=1; Motor2=0; Motor3=0;Motor4=0;
+ 339   2                      Delay_ms(time);
+ 340   2                      Motor1=0; Motor2=1; Motor3=0;Motor4=0;
+ 341   2                      Delay_ms(time);
+ 342   2                      Motor1=0; Motor2=0; Motor3=1;Motor4=0;
+ 343   2                      Delay_ms(time);
+ 344   2                      Motor1=0; Motor2=0; Motor3=0;Motor4=1;
+ 345   2                      Delay_ms(time);
+ 346   2                      Motor4=0;
+ 347   2              }
+ 348   1              if(mode==1) //反转
+ 349   1              {
+ 350   2                      Motor1=0; Motor2=0; Motor3=0;Motor4=1;
+ 351   2                      Delay_ms(time);
+ 352   2                      Motor1=0; Motor2=0; Motor3=1;Motor4=0;
+ 353   2                      Delay_ms(time);
+ 354   2                      Motor1=0; Motor2=1; Motor3=0;Motor4=0;
+ 355   2                      Delay_ms(time);
+ 356   2                      Motor1=1; Motor2=0; Motor3=0;Motor4=0;
+ 357   2                      Delay_ms(time);
+ 358   2                      Motor1=0;
+ 359   2              }
+ 360   1      }
+ 361          
+ 362          
+ 363          void main()
+ 364          {
+C51 COMPILER V9.01   MAIN                                                                  06/15/2021 23:49:52 PAGE 7   
+
+ 365   1              u8 i;
+ 366   1              int temp;
+ 367   1              LCD_Init();  
+ 368   1              DisplayListChar(0,0,"System Init....");
+ 369   1              Delay_ms(300);
+ 370   1              Uart_Init();
+ 371   1              cLight=(255-(u16)ADC(1,0))*100/255; //计算光照值
+ 372   1              cHumi=(255-(u16)ADC(1,1))*100/255; //计算湿度值
+ 373   1              temp=read_temp(); //检测温度
+ 374   1              Delay_ms(5000);
+ 375   1              Delay_ms(5000);
+ 376   1              Delay_ms(5000);
+ 377   1              SendString("AT\r\n");
+ 378   1              DisplayListChar(0,1,"Init OK!");
+ 379   1              Delay_ms(5000);
+ 380   1              LCD_WriteCMD(0x01);       //清屏 
+ 381   1              while(1)
+ 382   1              {
+ 383   2                      if(presskeynum==0)
+ 384   2                      {
+ 385   3                              cLight=(255-(u16)ADC(1,0))*100/255; //计算光照值
+ 386   3                              cHumi=(255-(u16)ADC(1,1))*100/255; //计算湿度值
+ 387   3                              temp=read_temp(); //计算温度值
+ 388   3                              ctemp=temp/16;
+ 389   3                              
+ 390   3                              DisplayListChar(0,0,"T");  //显示温度
+ 391   3                              DisplayOneChar(1,0,ctemp/10+0x30);
+ 392   3                              DisplayOneChar(2,0,ctemp%10+0x30);
+ 393   3                              DisplayListChar(3,0,"-");
+ 394   3                              DisplayOneChar(4,0,stemp_H/10+0x30);
+ 395   3                              DisplayOneChar(5,0,stemp_H%10+0x30);
+ 396   3                              DisplayListChar(6,0,"-");
+ 397   3                              DisplayOneChar(7,0,stemp_L/10+0x30);
+ 398   3                              DisplayOneChar(8,0,stemp_L%10+0x30);
+ 399   3      
+ 400   3                              DisplayListChar(10,1,"H"); //显示湿度
+ 401   3                              DisplayOneChar(11,1,cHumi/10%10+0x30);
+ 402   3                              DisplayOneChar(12,1,cHumi%10+0x30);
+ 403   3                              DisplayOneChar(13,1,'-');
+ 404   3                              DisplayOneChar(14,1,sHumi/10%10+0x30);
+ 405   3                              DisplayOneChar(15,1,sHumi%10+0x30);             
+ 406   3                              
+ 407   3                              DisplayListChar(0,1,"L"); //显示光照
+ 408   3                              DisplayOneChar(1,1,cLight/10%10+0x30);
+ 409   3                              DisplayOneChar(2,1,cLight%10+0x30);
+ 410   3                              DisplayOneChar(3,1,'-');
+ 411   3                              DisplayOneChar(4,1,sLight_H/10%10+0x30);
+ 412   3                              DisplayOneChar(5,1,sLight_H%10+0x30);
+ 413   3                              DisplayOneChar(6,1,'-');
+ 414   3                              DisplayOneChar(7,1,sLight_L/10%10+0x30);
+ 415   3                              DisplayOneChar(8,1,sLight_L%10+0x30);
+ 416   3                              
+ 417   3                              if((cHumi<sHumi)&&(humiflag==0))
+ 418   3                              {
+ 419   4                                      
+ 420   4                                      GSM_work(); //发送土壤湿度低，请注意。
+ 421   4                                      Delay_ms(2000);
+ 422   4                                      humiflag=1;
+ 423   4                              }
+ 424   3                              else if(cHumi>=sHumi)
+ 425   3                              {
+ 426   4                                      humiflag=0;
+C51 COMPILER V9.01   MAIN                                                                  06/15/2021 23:49:52 PAGE 8   
+
+ 427   4                                      i=0;
+ 428   4                              }
+ 429   3                              
+ 430   3                              if((lightflag==1)&&(motorflag==1))
+ 431   3                              {
+ 432   4                                      MotorFunction(1,5);
+ 433   4                                      if(motortime<300)
+ 434   4                                              motortime++;
+ 435   4                                      if(motortime==300)
+ 436   4                                      {
+ 437   5                                              motorflag=0;
+ 438   5                                      }
+ 439   4                              }
+ 440   3                              else if((lightflag!=1)&&(motorflag==1))
+ 441   3                              {
+ 442   4                                      MotorFunction(0,5);
+ 443   4                                      if(motortime>0)
+ 444   4                                              motortime--;
+ 445   4                                      if(motortime==0)
+ 446   4                                      {
+ 447   5                                              motorflag=0;
+ 448   5                                      }
+ 449   4                              }
+ 450   3                              
+ 451   3                              if(workmode==0) 
+ 452   3                              {
+ 453   4                                      DisplayListChar(10,0,"Auto"); 
+ 454   4                                      if((ctemp>stemp_H)&&(tempflag!=1)) 
+ 455   4                                      {
+ 456   5                                              RY_Fan=0;
+ 457   5                                              fanflag=1;
+ 458   5                                              tempflag=1;
+ 459   5                                      }
+ 460   4                                      else if((ctemp<stemp_H)&&(ctemp>=stemp_L)&&(tempflag==1))
+ 461   4                                      {
+ 462   5                                              RY_Fan=1;
+ 463   5                                              fanflag=0;
+ 464   5                                              tempflag=0;
+ 465   5                                      }
+ 466   4                                      else if((ctemp<stemp_L)&&(tempflag!=2))
+ 467   4                                      {
+ 468   5                                              RY_Hot=0;
+ 469   5                                              hotflag=1;
+ 470   5                                              tempflag=2;
+ 471   5                                      }
+ 472   4                                      else if((ctemp>stemp_L)&&(ctemp<=stemp_H)&&(tempflag==2))
+ 473   4                                      {
+ 474   5                                              RY_Hot=1;
+ 475   5                                              hotflag=0;
+ 476   5                                              tempflag=0;
+ 477   5                                      }
+ 478   4                                      
+ 479   4                                      if((cLight<sLight_L)&&(lightflag!=2)) 
+ 480   4                                      {
+ 481   5                                              lightflag=2;
+ 482   5                                              RY_LED=0;
+ 483   5                                              ledflag=1;
+ 484   5                                      }
+ 485   4                                      else if((cLight>sLight_L)&&(cLight<=sLight_H)&&(lightflag==2))
+ 486   4                                      {
+ 487   5                                              lightflag=0;
+ 488   5                                              RY_LED=1;
+C51 COMPILER V9.01   MAIN                                                                  06/15/2021 23:49:52 PAGE 9   
+
+ 489   5                                              ledflag=0;
+ 490   5                                      }
+ 491   4                                      else if((cLight>sLight_H)&&(lightflag!=1))
+ 492   4                                      {
+ 493   5                                              lightflag=1;
+ 494   5                                              motorflag=1;
+ 495   5                                      }
+ 496   4                                      else if((cLight<sLight_H)&&(cLight>=sLight_L)&&(lightflag==1))
+ 497   4                                      {
+ 498   5                                              lightflag=0;
+ 499   5                                              motorflag=1;
+ 500   5                                      }
+ 501   4                              }
+ 502   3                              else if(workmode==1)  //手动模式
+ 503   3                              {
+ 504   4                                      DisplayListChar(10,0,"Manu"); 
+ 505   4                                      if(Key_Fan==0)
+ 506   4                                      {
+ 507   5                                              Delay_ms(5);
+ 508   5                                              if(Key_Fan==0)
+ 509   5                                              {
+ 510   6                                                      if(fanflag==0) //风扇状态为关，则打开
+ 511   6                                                      {
+ 512   7                                                              RY_Fan=0;
+ 513   7                                                              fanflag=1;
+ 514   7                                                      }
+ 515   6                                                      else if(fanflag==1)//否则
+ 516   6                                                      {
+ 517   7                                                              RY_Fan=1;
+ 518   7                                                              fanflag=0;
+ 519   7                                                      }
+ 520   6                                                      while(Key_Fan==0);
+ 521   6                                              }
+ 522   5                                      }
+ 523   4                                      if(Key_Hot==0)
+ 524   4                                      {
+ 525   5                                              Delay_ms(5);
+ 526   5                                              if(Key_Hot==0)
+ 527   5                                              {
+ 528   6                                                      if(hotflag==0) //风扇状态为关，则打开
+ 529   6                                                      {
+ 530   7                                                              RY_Hot=0;
+ 531   7                                                              hotflag=1;
+ 532   7                                                      }
+ 533   6                                                      else if(hotflag==1)//否则
+ 534   6                                                      {
+ 535   7                                                              RY_Hot=1;
+ 536   7                                                              hotflag=0;
+ 537   7                                                      }
+ 538   6                                                      while(Key_Hot==0);
+ 539   6                                              }
+ 540   5                                      }
+ 541   4                                      if(Key_Light==0)
+ 542   4                                      {
+ 543   5                                              Delay_ms(5);
+ 544   5                                              if(Key_Light==0)
+ 545   5                                              {
+ 546   6                                                      if(lightflag==0) //照明灯状态为关，则打开
+ 547   6                                                      {
+ 548   7                                                              motorflag=1;
+ 549   7                                                              lightflag=1;
+ 550   7                                                      }
+C51 COMPILER V9.01   MAIN                                                                  06/15/2021 23:49:52 PAGE 10  
+
+ 551   6                                                      else if(lightflag==1)//否则
+ 552   6                                                      {
+ 553   7                                                              motorflag=1;
+ 554   7                                                              lightflag=0;
+ 555   7                                                      }
+ 556   6                                                      while(Key_Light==0);
+ 557   6                                              }
+ 558   5                                      }
+ 559   4                                      if(Key_LED==0)
+ 560   4                                      {
+ 561   5                                              Delay_ms(5);
+ 562   5                                              if(Key_LED==0)
+ 563   5                                              {
+ 564   6                                                      if(ledflag==0) //照明灯状态为关，则打开
+ 565   6                                                      {
+ 566   7                                                              RY_LED=0;
+ 567   7                                                              ledflag=1;
+ 568   7                                                      }
+ 569   6                                                      else if(ledflag==1)//否则
+ 570   6                                                      {
+ 571   7                                                              RY_LED=1;
+ 572   7                                                              ledflag=0;
+ 573   7                                                      }
+ 574   6                                                      while(Key_LED==0);
+ 575   6                                              }
+ 576   5                                      }
+ 577   4                              }
+ 578   3                      }
+ 579   2                      if(presskeynum==1)  //设置温度阈值
+ 580   2                      {
+ 581   3                              if(Key_Plus==0)    // 加
+ 582   3                              {
+ 583   4                                      Delay_ms(5);
+ 584   4                                      if(Key_Plus==0)
+ 585   4                                      {
+ 586   5                                              stemp_H++;
+ 587   5                                              if(stemp_H>50)
+ 588   5                                              {
+ 589   6                                                      stemp_H=stemp_L+5;
+ 590   6                                              }
+ 591   5                                              while(Key_Plus==0); //加上此句必须松按键才处理
+ 592   5                                      }
+ 593   4                              }
+ 594   3                              if(Key_Dec==0)    // 减
+ 595   3                              {
+ 596   4                                      Delay_ms(5);
+ 597   4                                      if(Key_Dec==0)
+ 598   4                                      {
+ 599   5                                              stemp_H--;
+ 600   5                                              if(stemp_H<stemp_L+5)
+ 601   5                                              {
+ 602   6                                                      stemp_H=50;
+ 603   6                                              }
+ 604   5                                              while(Key_Dec==0);       //加上此句必须松按键才处理
+ 605   5                                      }
+ 606   4                              }
+ 607   3                              DisplayListChar(0,0,"Set Temp High:");  
+ 608   3                              DisplayOneChar(0,1,stemp_H/10+0x30);
+ 609   3                              DisplayOneChar(1,1,stemp_H%10+0x30);
+ 610   3                      }       
+ 611   2                      
+ 612   2                      if(presskeynum==2)  //设置温度阈值
+C51 COMPILER V9.01   MAIN                                                                  06/15/2021 23:49:52 PAGE 11  
+
+ 613   2                      {
+ 614   3                              if(Key_Plus==0)    // 加
+ 615   3                              {
+ 616   4                                      Delay_ms(5);
+ 617   4                                      if(Key_Plus==0)
+ 618   4                                      {
+ 619   5                                              stemp_L++;
+ 620   5                                              if(stemp_L>stemp_H-5)
+ 621   5                                              {
+ 622   6                                                      stemp_L=10;
+ 623   6                                              }
+ 624   5                                              while(Key_Plus==0); //加上此句必须松按键才处理
+ 625   5                                      }
+ 626   4                              }
+ 627   3                              if(Key_Dec==0)    // 减
+ 628   3                              {
+ 629   4                                      Delay_ms(5);
+ 630   4                                      if(Key_Dec==0)
+ 631   4                                      {
+ 632   5                                              stemp_L--;
+ 633   5                                              if(stemp_L<10)
+ 634   5                                              {
+ 635   6                                                      stemp_L=stemp_H-5;
+ 636   6                                              }
+ 637   5                                              while(Key_Dec==0);       //加上此句必须松按键才处理
+ 638   5                                      }
+ 639   4                              }
+ 640   3                              DisplayListChar(0,0,"Set Temp Low:");   
+ 641   3                              DisplayOneChar(0,1,stemp_L/10+0x30);
+ 642   3                              DisplayOneChar(1,1,stemp_L%10+0x30);
+ 643   3                      }       
+ 644   2                      
+ 645   2                      if(presskeynum==3)  //设置土壤湿度阈值
+ 646   2                      {
+ 647   3                              if(Key_Plus==0)    // 加
+ 648   3                              {
+ 649   4                                      Delay_ms(5);
+ 650   4                                      if(Key_Plus==0)
+ 651   4                                      {
+ 652   5                                              sHumi+=5;
+ 653   5                                              if(sHumi>90)
+ 654   5                                              {
+ 655   6                                                      sHumi=10;
+ 656   6                                              }
+ 657   5                                              while(Key_Plus==0); //加上此句必须松按键才处理
+ 658   5                                      }
+ 659   4                              }
+ 660   3                              if(Key_Dec==0)    // 减
+ 661   3                              {
+ 662   4                                      Delay_ms(5);
+ 663   4                                      if(Key_Dec==0)
+ 664   4                                      {
+ 665   5                                              sHumi-=5;
+ 666   5                                              if(sHumi<10)
+ 667   5                                              {
+ 668   6                                                      sHumi=90;
+ 669   6                                              }
+ 670   5                                              while(Key_Dec==0);       //加上此句必须松按键才处理
+ 671   5                                      }
+ 672   4                              }
+ 673   3                              DisplayListChar(0,0,"Set Humi Value:"); 
+ 674   3                              DisplayOneChar(0,1,sHumi/10+0x30);
+C51 COMPILER V9.01   MAIN                                                                  06/15/2021 23:49:52 PAGE 12  
+
+ 675   3                              DisplayOneChar(1,1,sHumi%10+0x30);
+ 676   3                      }       
+ 677   2                      if(presskeynum==4)  //设置光照上限阈值
+ 678   2                      {
+ 679   3                              if(Key_Plus==0)    // 加
+ 680   3                              {
+ 681   4                                      Delay_ms(5);
+ 682   4                                      if(Key_Plus==0)
+ 683   4                                      {
+ 684   5                                              sLight_H+=5;
+ 685   5                                              if(sLight_H>90)
+ 686   5                                              {
+ 687   6                                                      sLight_H=sLight_L+10;
+ 688   6                                              }
+ 689   5                                              while(Key_Plus==0); //加上此句必须松按键才处理
+ 690   5                                      }
+ 691   4                              }
+ 692   3                              if(Key_Dec==0)    // 减
+ 693   3                              {
+ 694   4                                      Delay_ms(5);
+ 695   4                                      if(Key_Dec==0)
+ 696   4                                      {
+ 697   5                                              sLight_H-=5;
+ 698   5                                              if(sLight_H<sLight_L-10)
+ 699   5                                              {
+ 700   6                                                      sLight_H=90;
+ 701   6                                              }
+ 702   5                                              while(Key_Dec==0);       //加上此句必须松按键才处理
+ 703   5                                      }
+ 704   4                              }
+ 705   3                              DisplayListChar(0,0,"Set Light High:"); 
+ 706   3                              DisplayOneChar(0,1,sLight_H/10+0x30);
+ 707   3                              DisplayOneChar(1,1,sLight_H%10+0x30);
+ 708   3                      }       
+ 709   2                      if(presskeynum==5)  //设置光照下限阈值
+ 710   2                      {
+ 711   3                              if(Key_Plus==0)    // 加
+ 712   3                              {
+ 713   4                                      Delay_ms(5);
+ 714   4                                      if(Key_Plus==0)
+ 715   4                                      {
+ 716   5                                              sLight_L+=5;
+ 717   5                                              if(sLight_L>sLight_H-10)
+ 718   5                                              {
+ 719   6                                                      sLight_L=90;
+ 720   6                                              }
+ 721   5                                              while(Key_Plus==0); //加上此句必须松按键才处理
+ 722   5                                      }
+ 723   4                              }
+ 724   3                              if(Key_Dec==0)    // 减
+ 725   3                              {
+ 726   4                                      Delay_ms(5);
+ 727   4                                      if(Key_Dec==0)
+ 728   4                                      {
+ 729   5                                              sLight_L-=5;
+ 730   5                                              if(sLight_L<10)
+ 731   5                                              {
+ 732   6                                                      sLight_L=sLight_H-10;
+ 733   6                                              }
+ 734   5                                              while(Key_Dec==0);       //加上此句必须松按键才处理
+ 735   5                                      }
+ 736   4                              }
+C51 COMPILER V9.01   MAIN                                                                  06/15/2021 23:49:52 PAGE 13  
+
+ 737   3                              DisplayListChar(0,0,"Set Light Low:");  
+ 738   3                              DisplayOneChar(0,1,sLight_L/10+0x30);
+ 739   3                              DisplayOneChar(1,1,sLight_L%10+0x30);
+ 740   3                      }
+ 741   2                      if(presskeynum==6)  //设置工作模式
+ 742   2                      {
+ 743   3                              if(Key_Plus==0)    // 加
+ 744   3                              {
+ 745   4                                      Delay_ms(5);
+ 746   4                                      if(Key_Plus==0)
+ 747   4                                      {
+ 748   5                                              if(workmode==0) workmode=1;
+ 749   5                                              else workmode=0;
+ 750   5                                              while(Key_Plus==0); //加上此句必须松按键才处理
+ 751   5                                      }
+ 752   4                              }
+ 753   3                              if(Key_Dec==0)    // 减
+ 754   3                              {
+ 755   4                                      Delay_ms(5);
+ 756   4                                      if(Key_Dec==0)
+ 757   4                                      {
+ 758   5                                              if(workmode==0) workmode=1;
+ 759   5                                              else workmode=0;
+ 760   5                                              while(Key_Dec==0);       //加上此句必须松按键才处理
+ 761   5                                      }
+ 762   4                              }
+ 763   3                              DisplayListChar(0,0,"Set WorkMode:");   
+ 764   3                              if(workmode==0)  DisplayListChar(0,1,"AutoMode");
+ 765   3                              else if(workmode==1)  DisplayListChar(0,1,"Manual  ");
+ 766   3                      }       
+ 767   2                      if(presskeynum==7)
+ 768   2                      {
+ 769   3                              presskeynum=0;
+ 770   3                              
+ 771   3                      }
+ 772   2      
+ 773   2              }
+ 774   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   2569    ----
+   CONSTANT SIZE    =    271    ----
+   XDATA SIZE       =     20    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     27       9
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----       3
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
